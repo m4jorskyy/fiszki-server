@@ -1,0 +1,59 @@
+name: CI & Deploy (Windows Self-Hosted Runner)
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+
+concurrency:
+  group: deploy-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  test-and-deploy:
+    runs-on: self-hosted
+    defaults:
+      run:
+        shell: powershell
+    env:
+      ENV_NAME: ${{ github.ref_name == 'main' && 'prod' || 'staging' }}
+      SERVICE_NAME: ${{ github.ref_name == 'main' && 'fiszki-server-prod' || 'fiszki-server-staging' }}
+      PORT: ${{ github.ref_name == 'main' && '8080' || '8081' }}
+      DEPLOY_DIR: ${{ github.ref_name == 'main' && 'C:\fiszki\prod' || 'C:\fiszki\staging' }}
+
+    steps:
+      - name: Checkout branch (${{ github.ref_name }})
+        uses: actions/checkout@v4
+
+      - name: Run unit tests
+        run: go test ./...
+
+      - name: Build Windows executable
+        run: |
+          New-Item -ItemType Directory -Force -Path "$env:DEPLOY_DIR" | Out-Null
+          go build -o "$env:DEPLOY_DIR\fiszki-server-new.exe" .\cmd\api
+
+      - name: Write environment file (.env)
+        env:
+          DATABASE_URL: ${{ github.ref_name == 'main' && secrets.PROD_DATABASE_URL || secrets.STAGING_DATABASE_URL }}
+          JWT_SECRET: ${{ github.ref_name == 'main' && secrets.PROD_JWT_SECRET || secrets.STAGING_JWT_SECRET }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          $lines = @(
+            "PORT=$($env:PORT)",
+            "DATABASE_URL=$($env:DATABASE_URL)",
+            "JWT_SECRET=$($env:JWT_SECRET)",
+            "ACCESS_TOKEN_TTL_MINUTES=15",
+            "REFRESH_TOKEN_TTL_DAYS=30",
+            "GEMINI_API_KEY=$($env:GEMINI_API_KEY)",
+            "GEMINI_MODEL=gemini-2.5-flash"
+          )
+          Set-Content -Path "$env:DEPLOY_DIR\.env" -Value $lines -Encoding Ascii
+
+      - name: Swap binary and restart Windows Service
+        run: |
+          .\deploy\windows\deploy-service.ps1 `
+            -ServiceName $env:SERVICE_NAME `
+            -DeployDir $env:DEPLOY_DIR `
+            -Port $env:PORT
