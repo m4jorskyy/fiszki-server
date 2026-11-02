@@ -41,7 +41,8 @@ func loadDotEnv(filename string) {
 
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
+		line := strings.TrimPrefix(scanner.Text(), "\xef\xbb\xbf")
+		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}

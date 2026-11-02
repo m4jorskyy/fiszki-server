@@ -42,6 +42,18 @@ for ($i = 1; $i -le 15; $i++) {
 }
 
 if (-not $healthy) {
+    Write-Host "=== Service status ==="
+    Get-Service -Name $ServiceName | Format-List *
+    $stderrLog = Join-Path $DeployDir "logs\stderr.log"
+    $stdoutLog = Join-Path $DeployDir "logs\stdout.log"
+    if (Test-Path $stderrLog) {
+        Write-Host "=== Last 30 lines of stderr.log ==="
+        Get-Content $stderrLog -Tail 30
+    }
+    if (Test-Path $stdoutLog) {
+        Write-Host "=== Last 30 lines of stdout.log ==="
+        Get-Content $stdoutLog -Tail 30
+    }
     Write-Error "Health check failed on port $Port!"
     exit 1
 }

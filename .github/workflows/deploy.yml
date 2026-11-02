@@ -49,7 +49,7 @@ jobs:
             "GEMINI_API_KEY=$($env:GEMINI_API_KEY)",
             "GEMINI_MODEL=gemini-2.5-flash"
           )
-          Set-Content -Path "$env:DEPLOY_DIR\.env" -Value $lines -Encoding UTF8
+          Set-Content -Path "$env:DEPLOY_DIR\.env" -Value $lines -Encoding Ascii
 
       - name: Swap binary and restart Windows Service
         run: |
