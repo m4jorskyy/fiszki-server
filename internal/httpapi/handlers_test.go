@@ -4,26 +4,33 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/textproto"
 	"strings"
 	"testing"
+	"time"
 
+	"fiszki-server/internal/auth"
 	"fiszki-server/internal/domain"
 )
 
 type mockExtractor struct {
 	candidates []domain.ExtractedCardCandidate
+	err        error
 }
 
 func (m *mockExtractor) ExtractCardsFromImage(_ context.Context, _ []byte, _ string) ([]domain.ExtractedCardCandidate, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
 	return m.candidates, nil
 }
 
 func TestParseCardsFromCSV(t *testing.T) {
-	csvData := "front,back,tags\nHola,Hello,spanish;greeting\nAdiós,Goodbye,spanish\n"
+	csvData := "front,back,tags\nHola,Hello,spanish;greeting\nAdiós,Goodbye,\"spanish,basic\"\nIncompleteRowOnlyOneCol\n , , \n"
 	cards, err := parseCardsFromCSV(strings.NewReader(csvData))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -34,58 +41,242 @@ func TestParseCardsFromCSV(t *testing.T) {
 	if cards[0].Front != "Hola" || cards[0].Back != "Hello" || len(cards[0].Tags) != 2 {
 		t.Fatalf("unexpected first card: %+v", cards[0])
 	}
+	if cards[1].Front != "Adiós" || len(cards[1].Tags) != 2 {
+		t.Fatalf("unexpected second card: %+v", cards[1])
+	}
 }
 
 func TestParseCardsFromJSON(t *testing.T) {
-	jsonData := `{"cards":[{"front":"Q1","back":"A1","tags":["t1"]}]}`
-	cards, err := parseCardsFromJSON(strings.NewReader(jsonData))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	t.Run("wrapped cards object", func(t *testing.T) {
+		jsonData := `{"cards":[{"front":"Q1","back":"A1","tags":["t1"]}]}`
+		cards, err := parseCardsFromJSON(strings.NewReader(jsonData))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(cards) != 1 || cards[0].Front != "Q1" {
+			t.Fatalf("unexpected parsed cards: %+v", cards)
+		}
+	})
+
+	t.Run("direct JSON array", func(t *testing.T) {
+		jsonData := `[{"front":"Q2","back":"A2"}]`
+		cards, err := parseCardsFromJSON(strings.NewReader(jsonData))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(cards) != 1 || cards[0].Front != "Q2" {
+			t.Fatalf("unexpected parsed cards: %+v", cards)
+		}
+	})
+
+	t.Run("invalid JSON returns validation error", func(t *testing.T) {
+		_, err := parseCardsFromJSON(strings.NewReader(`not-json`))
+		if !errors.Is(err, domain.ErrValidation) {
+			t.Fatalf("expected ErrValidation, got %v", err)
+		}
+	})
+}
+
+func TestSanitizeFilename(t *testing.T) {
+	if got := sanitizeFilename("  Spanish Verbs 101!@# "); got != "spanish-verbs-101" {
+		t.Fatalf("expected spanish-verbs-101, got %q", got)
 	}
-	if len(cards) != 1 || cards[0].Front != "Q1" {
-		t.Fatalf("unexpected parsed cards: %+v", cards)
+	if got := sanitizeFilename("!!!"); got != "deck" {
+		t.Fatalf("expected fallback 'deck', got %q", got)
+	}
+}
+
+func TestIsSupportedImageMIME(t *testing.T) {
+	supported := []string{"image/jpeg", "IMAGE/PNG", "image/webp", "image/heic", "image/heif"}
+	for _, m := range supported {
+		if !isSupportedImageMIME(m) {
+			t.Fatalf("expected MIME %q to be supported", m)
+		}
+	}
+	unsupported := []string{"application/pdf", "text/plain", "image/svg+xml"}
+	for _, m := range unsupported {
+		if isSupportedImageMIME(m) {
+			t.Fatalf("expected MIME %q to be unsupported", m)
+		}
+	}
+}
+
+func TestWriteError_StatusMapping(t *testing.T) {
+	cases := []struct {
+		err        error
+		wantStatus int
+	}{
+		{domain.ErrNotFound, http.StatusNotFound},
+		{domain.ErrAlreadyExists, http.StatusConflict},
+		{domain.ErrInvalidCredentials, http.StatusUnauthorized},
+		{domain.ErrUnauthorized, http.StatusUnauthorized},
+		{domain.ErrValidation, http.StatusBadRequest},
+		{errors.New("unexpected db failure"), http.StatusInternalServerError},
+	}
+
+	for _, tc := range cases {
+		rec := httptest.NewRecorder()
+		writeError(rec, tc.err)
+		if rec.Code != tc.wantStatus {
+			t.Fatalf("for err %v expected status %d, got %d", tc.err, tc.wantStatus, rec.Code)
+		}
 	}
 }
 
 func TestExtractFromPhotoHandler(t *testing.T) {
-	ext := &mockExtractor{
-		candidates: []domain.ExtractedCardCandidate{
-			{Front: "mitochondria", Back: "powerhouse of the cell"},
-		},
-	}
-	handler := NewCardHandler(nil, ext)
+	t.Run("successful photo extraction", func(t *testing.T) {
+		ext := &mockExtractor{
+			candidates: []domain.ExtractedCardCandidate{
+				{Front: "mitochondria", Back: "powerhouse of the cell"},
+			},
+		}
+		handler := NewCardHandler(nil, ext)
 
-	var body bytes.Buffer
-	mw := multipart.NewWriter(&body)
-	h := make(textproto.MIMEHeader)
-	h.Set("Content-Disposition", `form-data; name="image"; filename="notes.png"`)
-	h.Set("Content-Type", "image/png")
-	part, err := mw.CreatePart(h)
+		var body bytes.Buffer
+		mw := multipart.NewWriter(&body)
+		h := make(textproto.MIMEHeader)
+		h.Set("Content-Disposition", `form-data; name="image"; filename="notes.png"`)
+		h.Set("Content-Type", "image/png")
+		part, err := mw.CreatePart(h)
+		if err != nil {
+			t.Fatalf("create part: %v", err)
+		}
+		_, _ = part.Write([]byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A})
+		_ = mw.Close()
+
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/cards/extract-from-photo", &body)
+		req.Header.Set("Content-Type", mw.FormDataContentType())
+		rec := httptest.NewRecorder()
+
+		handler.ExtractFromPhoto(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+
+		var resp struct {
+			Count int                             `json:"count"`
+			Cards []domain.ExtractedCardCandidate `json:"cards"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("unmarshal response: %v", err)
+		}
+		if resp.Count != 1 || resp.Cards[0].Front != "mitochondria" {
+			t.Fatalf("unexpected response payload: %+v", resp)
+		}
+	})
+
+	t.Run("nil extractor returns 400", func(t *testing.T) {
+		handler := NewCardHandler(nil, nil)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/cards/extract-from-photo", nil)
+		rec := httptest.NewRecorder()
+		handler.ExtractFromPhoto(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 when extractor is nil, got %d", rec.Code)
+		}
+	})
+
+	t.Run("unsupported mime type returns 400", func(t *testing.T) {
+		ext := &mockExtractor{}
+		handler := NewCardHandler(nil, ext)
+
+		var body bytes.Buffer
+		mw := multipart.NewWriter(&body)
+		h := make(textproto.MIMEHeader)
+		h.Set("Content-Disposition", `form-data; name="image"; filename="doc.txt"`)
+		h.Set("Content-Type", "text/plain")
+		part, _ := mw.CreatePart(h)
+		_, _ = part.Write([]byte("plain text file"))
+		_ = mw.Close()
+
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/cards/extract-from-photo", &body)
+		req.Header.Set("Content-Type", mw.FormDataContentType())
+		rec := httptest.NewRecorder()
+
+		handler.ExtractFromPhoto(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for text/plain upload, got %d", rec.Code)
+		}
+	})
+}
+
+func TestHandlerInputValidation_And_RouterWiring(t *testing.T) {
+	tm := auth.NewTokenManager("test-secret", 15*time.Minute, 24*time.Hour)
+	router := NewRouter(Dependencies{
+		TokenManager:  tm,
+		CardExtractor: &mockExtractor{},
+	})
+
+	token, _, err := tm.GenerateAccessToken(domain.User{ID: "u-1", Email: "u@example.com"})
 	if err != nil {
-		t.Fatalf("create part: %v", err)
-	}
-	// Minimal PNG header bytes
-	_, _ = part.Write([]byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A})
-	_ = mw.Close()
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/cards/extract-from-photo", &body)
-	req.Header.Set("Content-Type", mw.FormDataContentType())
-	rec := httptest.NewRecorder()
-
-	handler.ExtractFromPhoto(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+		t.Fatalf("generate token: %v", err)
 	}
 
-	var resp struct {
-		Count int                             `json:"count"`
-		Cards []domain.ExtractedCardCandidate `json:"cards"`
+	// 1. GET /healthz -> 200 OK
+	reqHealth := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	recHealth := httptest.NewRecorder()
+	router.ServeHTTP(recHealth, reqHealth)
+	if recHealth.Code != http.StatusOK {
+		t.Fatalf("expected 200 from /healthz, got %d", recHealth.Code)
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("unmarshal response: %v", err)
+
+	// 2. POST /api/v1/auth/register with invalid email -> 400
+	reqReg := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register", strings.NewReader(`{"email":"not-an-email","password":"password123"}`))
+	recReg := httptest.NewRecorder()
+	router.ServeHTTP(recReg, reqReg)
+	if recReg.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid email, got %d", recReg.Code)
 	}
-	if resp.Count != 1 || resp.Cards[0].Front != "mitochondria" {
-		t.Fatalf("unexpected response payload: %+v", resp)
+
+	// 3. POST /api/v1/auth/register with short password -> 400
+	reqShortPwd := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register", strings.NewReader(`{"email":"valid@example.com","password":"short"}`))
+	recShortPwd := httptest.NewRecorder()
+	router.ServeHTTP(recShortPwd, reqShortPwd)
+	if recShortPwd.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for short password, got %d", recShortPwd.Code)
+	}
+
+	// 4. POST /api/v1/auth/refresh with empty token -> 400
+	reqRefresh := httptest.NewRequest(http.MethodPost, "/api/v1/auth/refresh", strings.NewReader(`{"refresh_token":"  "}`))
+	recRefresh := httptest.NewRecorder()
+	router.ServeHTTP(recRefresh, reqRefresh)
+	if recRefresh.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for empty refresh token, got %d", recRefresh.Code)
+	}
+
+	// 5. POST /api/v1/decks with empty name -> 400
+	reqDeck := httptest.NewRequest(http.MethodPost, "/api/v1/decks", strings.NewReader(`{"name":"   "}`))
+	reqDeck.Header.Set("Authorization", "Bearer "+token)
+	recDeck := httptest.NewRecorder()
+	router.ServeHTTP(recDeck, reqDeck)
+	if recDeck.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for empty deck name, got %d", recDeck.Code)
+	}
+
+	// 6. POST /api/v1/decks/{deckID}/cards with missing back -> 400
+	reqCard := httptest.NewRequest(http.MethodPost, "/api/v1/decks/deck-1/cards", strings.NewReader(`{"front":"OnlyFront","back":""}`))
+	reqCard.Header.Set("Authorization", "Bearer "+token)
+	recCard := httptest.NewRecorder()
+	router.ServeHTTP(recCard, reqCard)
+	if recCard.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for empty card back, got %d", recCard.Code)
+	}
+
+	// 7. POST /api/v1/decks/{deckID}/cards/bulk with empty cards slice -> 400
+	reqBulk := httptest.NewRequest(http.MethodPost, "/api/v1/decks/deck-1/cards/bulk", strings.NewReader(`{"cards":[]}`))
+	reqBulk.Header.Set("Authorization", "Bearer "+token)
+	recBulk := httptest.NewRecorder()
+	router.ServeHTTP(recBulk, reqBulk)
+	if recBulk.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for empty bulk cards array, got %d", recBulk.Code)
+	}
+
+	// 8. POST /api/v1/study/cards/{cardID}/review with invalid rating -> 400
+	reqReview := httptest.NewRequest(http.MethodPost, "/api/v1/study/cards/card-1/review", strings.NewReader(`{"rating":99}`))
+	reqReview.Header.Set("Authorization", "Bearer "+token)
+	recReview := httptest.NewRecorder()
+	router.ServeHTTP(recReview, reqReview)
+	if recReview.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid rating 99, got %d", recReview.Code)
 	}
 }
