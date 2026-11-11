@@ -151,7 +151,35 @@ func TestMiddleware_And_UserIDFromContext(t *testing.T) {
 		t.Fatalf("expected context userID %q, got %q", user.ID, capturedUserID)
 	}
 
-	// 5. Empty context returns ""
+	// 5. Valid access_token cookie (no Authorization header) -> 200 and UserID injected in context
+	capturedUserID = ""
+	req5 := httptest.NewRequest(http.MethodGet, "/api/v1/decks", nil)
+	req5.AddCookie(&http.Cookie{
+		Name:  "access_token",
+		Value: validToken,
+	})
+	rec5 := httptest.NewRecorder()
+	protected.ServeHTTP(rec5, req5)
+	if rec5.Code != http.StatusOK {
+		t.Fatalf("expected 200 for valid access_token cookie, got %d", rec5.Code)
+	}
+	if capturedUserID != user.ID {
+		t.Fatalf("expected context userID %q from cookie, got %q", user.ID, capturedUserID)
+	}
+
+	// 6. Invalid access_token cookie -> 401
+	req6 := httptest.NewRequest(http.MethodGet, "/api/v1/decks", nil)
+	req6.AddCookie(&http.Cookie{
+		Name:  "access_token",
+		Value: "invalid.cookie.token",
+	})
+	rec6 := httptest.NewRecorder()
+	protected.ServeHTTP(rec6, req6)
+	if rec6.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for invalid access_token cookie, got %d", rec6.Code)
+	}
+
+	// 7. Empty context returns ""
 	if got := UserIDFromContext(req1.Context()); got != "" {
 		t.Fatalf("expected empty userID from unauthenticated context, got %q", got)
 	}

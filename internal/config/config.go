@@ -18,6 +18,8 @@ type Config struct {
 	RefreshTokenTTL time.Duration
 	GeminiAPIKey    string
 	GeminiModel     string
+	CookieDomain    string
+	AllowedOrigins  []string
 }
 
 func Load() Config {
@@ -32,7 +34,23 @@ func Load() Config {
 		RefreshTokenTTL: time.Duration(getEnvInt("REFRESH_TOKEN_TTL_DAYS", 30)) * time.Hour * 24,
 		GeminiAPIKey:    getEnv("GEMINI_API_KEY", ""),
 		GeminiModel:     getEnv("GEMINI_MODEL", "gemini-2.5-flash"),
+		CookieDomain:    getEnv("COOKIE_DOMAIN", ""),
+		AllowedOrigins:  splitAndTrim(getEnv("ALLOWED_ORIGINS", "")),
 	}
+}
+
+func splitAndTrim(s string) []string {
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	res := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if t := strings.TrimSpace(p); t != "" {
+			res = append(res, t)
+		}
+	}
+	return res
 }
 
 func (c Config) Validate() error {
