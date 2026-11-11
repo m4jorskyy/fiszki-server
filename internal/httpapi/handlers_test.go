@@ -86,6 +86,44 @@ func TestSanitizeFilename(t *testing.T) {
 	}
 }
 
+func TestSanitizeCSVCell(t *testing.T) {
+	if got := sanitizeCSVCell("=CMD|' /C calc'!A0"); got != "'=CMD|' /C calc'!A0" {
+		t.Fatalf("expected formula to be escaped with leading quote, got %q", got)
+	}
+	if got := sanitizeCSVCell("+SUM(A1:A2)"); got != "'+SUM(A1:A2)" {
+		t.Fatalf("expected + formula to be escaped, got %q", got)
+	}
+	if got := sanitizeCSVCell("normal text"); got != "normal text" {
+		t.Fatalf("expected normal text unchanged, got %q", got)
+	}
+}
+
+func TestCloudflareRealIP(t *testing.T) {
+	var seenRemoteAddr string
+	h := cloudflareRealIP(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenRemoteAddr = r.RemoteAddr
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// 1. Loopback request with valid CF-Connecting-IP -> updates RemoteAddr
+	req1 := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	req1.RemoteAddr = "127.0.0.1:54321"
+	req1.Header.Set("CF-Connecting-IP", "203.0.113.50")
+	h.ServeHTTP(httptest.NewRecorder(), req1)
+	if seenRemoteAddr != "203.0.113.50" {
+		t.Fatalf("expected RemoteAddr 203.0.113.50 from loopback CF-Connecting-IP, got %q", seenRemoteAddr)
+	}
+
+	// 2. Non-loopback request attempting to spoof CF-Connecting-IP -> ignored
+	req2 := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	req2.RemoteAddr = "198.51.100.10:54321"
+	req2.Header.Set("CF-Connecting-IP", "1.2.3.4")
+	h.ServeHTTP(httptest.NewRecorder(), req2)
+	if seenRemoteAddr != "198.51.100.10:54321" {
+		t.Fatalf("expected spoofed CF-Connecting-IP from non-loopback to be ignored, got %q", seenRemoteAddr)
+	}
+}
+
 func TestIsSupportedImageMIME(t *testing.T) {
 	supported := []string{"image/jpeg", "IMAGE/PNG", "image/webp", "image/heic", "image/heif"}
 	for _, m := range supported {
@@ -234,6 +272,15 @@ func TestHandlerInputValidation_And_RouterWiring(t *testing.T) {
 	router.ServeHTTP(recShortPwd, reqShortPwd)
 	if recShortPwd.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 for short password, got %d", recShortPwd.Code)
+	}
+
+	// 3b. POST /api/v1/auth/register with >72 byte password -> 400 (not 500)
+	longPwd := strings.Repeat("a", 73)
+	reqLongPwd := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register", strings.NewReader(`{"email":"valid@example.com","password":"`+longPwd+`"}`))
+	recLongPwd := httptest.NewRecorder()
+	router.ServeHTTP(recLongPwd, reqLongPwd)
+	if recLongPwd.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for >72 byte password, got %d", recLongPwd.Code)
 	}
 
 	// 4. POST /api/v1/auth/refresh with empty token -> 400

@@ -2,7 +2,9 @@ package httpapi
 
 import (
 	"context"
+	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -24,11 +26,27 @@ type Dependencies struct {
 	CardExtractor extractor.CardExtractor
 }
 
+// cloudflareRealIP trusts CF-Connecting-IP only when the request arrives over loopback (local cloudflared tunnel).
+func cloudflareRealIP(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			host = r.RemoteAddr
+		}
+		if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+			if cfIP := strings.TrimSpace(r.Header.Get("CF-Connecting-IP")); net.ParseIP(cfIP) != nil {
+				r.RemoteAddr = cfIP
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func NewRouter(deps Dependencies) http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
+	r.Use(cloudflareRealIP)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 

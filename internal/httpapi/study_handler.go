@@ -53,7 +53,7 @@ func (h *StudyHandler) SubmitReview(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Rating domain.Rating `json:"rating"`
 	}
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeError(w, fmt.Errorf("%w: invalid JSON payload", domain.ErrValidation))
 		return
 	}

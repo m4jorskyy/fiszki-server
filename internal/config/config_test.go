@@ -76,3 +76,23 @@ func TestGetEnvHelpers_Fallbacks(t *testing.T) {
 		t.Fatalf("expected fallback 99 on invalid int, got %d", got)
 	}
 }
+
+func TestConfig_Validate(t *testing.T) {
+	invalidSecrets := []string{
+		"",
+		"short-secret",
+		"dev-secret-change-me-in-production",
+		"change-this-to-a-long-random-secret",
+	}
+	for _, s := range invalidSecrets {
+		cfg := Config{JWTSecret: s}
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("expected Validate() error for weak/placeholder JWT_SECRET %q", s)
+		}
+	}
+
+	validCfg := Config{JWTSecret: "a-very-strong-production-jwt-secret-key-2026"}
+	if err := validCfg.Validate(); err != nil {
+		t.Fatalf("expected valid config to pass Validate(), got %v", err)
+	}
+}

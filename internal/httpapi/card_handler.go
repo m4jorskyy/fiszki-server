@@ -48,7 +48,7 @@ func (h *CardHandler) CreateCard(w http.ResponseWriter, r *http.Request) {
 	deckID := chi.URLParam(r, "deckID")
 
 	var input domain.CardInput
-	if err := decodeJSON(r, &input); err != nil {
+	if err := decodeJSON(w, r, &input); err != nil {
 		writeError(w, fmt.Errorf("%w: invalid JSON payload", domain.ErrValidation))
 		return
 	}
@@ -73,7 +73,7 @@ func (h *CardHandler) BulkCreateCards(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Cards []domain.CardInput `json:"cards"`
 	}
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeError(w, fmt.Errorf("%w: invalid JSON payload", domain.ErrValidation))
 		return
 	}
@@ -110,7 +110,7 @@ func (h *CardHandler) UpdateCard(w http.ResponseWriter, r *http.Request) {
 	cardID := chi.URLParam(r, "cardID")
 
 	var input domain.CardInput
-	if err := decodeJSON(r, &input); err != nil {
+	if err := decodeJSON(w, r, &input); err != nil {
 		writeError(w, fmt.Errorf("%w: invalid JSON payload", domain.ErrValidation))
 		return
 	}

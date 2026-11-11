@@ -35,7 +35,7 @@ type authTokensResponse struct {
 
 func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	var req authCredentialsRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeError(w, fmt.Errorf("%w: invalid JSON payload", domain.ErrValidation))
 		return
 	}
@@ -47,6 +47,10 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(req.Password) < 8 {
 		writeError(w, fmt.Errorf("%w: password must be at least 8 characters", domain.ErrValidation))
+		return
+	}
+	if len(req.Password) > 72 {
+		writeError(w, fmt.Errorf("%w: password must not exceed 72 bytes", domain.ErrValidation))
 		return
 	}
 
@@ -72,8 +76,12 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	var req authCredentialsRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeError(w, fmt.Errorf("%w: invalid JSON payload", domain.ErrValidation))
+		return
+	}
+	if len(req.Password) > 72 {
+		writeError(w, domain.ErrInvalidCredentials)
 		return
 	}
 
@@ -100,7 +108,7 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		RefreshToken string `json:"refresh_token"`
 	}
-	if err := decodeJSON(r, &req); err != nil || strings.TrimSpace(req.RefreshToken) == "" {
+	if err := decodeJSON(w, r, &req); err != nil || strings.TrimSpace(req.RefreshToken) == "" {
 		writeError(w, fmt.Errorf("%w: refresh_token is required", domain.ErrValidation))
 		return
 	}
@@ -124,7 +132,7 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		RefreshToken string `json:"refresh_token"`
 	}
-	if err := decodeJSON(r, &req); err != nil || strings.TrimSpace(req.RefreshToken) == "" {
+	if err := decodeJSON(w, r, &req); err != nil || strings.TrimSpace(req.RefreshToken) == "" {
 		writeError(w, fmt.Errorf("%w: refresh_token is required", domain.ErrValidation))
 		return
 	}
