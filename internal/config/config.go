@@ -2,6 +2,7 @@ package config
 
 import (
 	"bufio"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -9,6 +10,7 @@ import (
 )
 
 type Config struct {
+	Host            string
 	Port            string
 	DatabaseURL     string
 	JWTSecret       string
@@ -22,14 +24,26 @@ func Load() Config {
 	loadDotEnv(".env")
 
 	return Config{
+		Host:            getEnv("HOST", ""),
 		Port:            getEnv("PORT", "8080"),
 		DatabaseURL:     getEnv("DATABASE_URL", "postgres://fiszki:fiszki@localhost:5432/fiszki?sslmode=disable"),
-		JWTSecret:       getEnv("JWT_SECRET", "dev-secret-change-me-in-production"),
+		JWTSecret:       getEnv("JWT_SECRET", ""),
 		AccessTokenTTL:  time.Duration(getEnvInt("ACCESS_TOKEN_TTL_MINUTES", 15)) * time.Minute,
-		RefreshTokenTTL: time.Duration(getEnvInt("REFRESH_TOKEN_TTL_DAYS", 30)) * 24 * time.Hour,
+		RefreshTokenTTL: time.Duration(getEnvInt("REFRESH_TOKEN_TTL_DAYS", 30)) * time.Hour * 24,
 		GeminiAPIKey:    getEnv("GEMINI_API_KEY", ""),
 		GeminiModel:     getEnv("GEMINI_MODEL", "gemini-2.5-flash"),
 	}
+}
+
+func (c Config) Validate() error {
+	secret := strings.TrimSpace(c.JWTSecret)
+	if secret == "" ||
+		secret == "dev-secret-change-me-in-production" ||
+		secret == "change-this-to-a-long-random-secret" ||
+		len(secret) < 16 {
+		return fmt.Errorf("JWT_SECRET must be set to a strong secret (at least 16 characters) and not a default placeholder")
+	}
+	return nil
 }
 
 func loadDotEnv(filename string) {

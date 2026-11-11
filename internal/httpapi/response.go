@@ -29,7 +29,10 @@ func writeError(w http.ResponseWriter, err error) {
 	}
 }
 
-func decodeJSON(r *http.Request, dst any) error {
+const maxJSONBodyBytes = 1 << 20 // 1 MB
+
+func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
+	r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
 	dec := json.NewDecoder(r.Body)
 	if err := dec.Decode(dst); err != nil {
 		return errors.Join(domain.ErrValidation, err)

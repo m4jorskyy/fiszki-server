@@ -39,10 +39,12 @@ func (h *DeckHandler) ListDecks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"decks": decks})
 }
 
+const maxImportBodyBytes = 10 << 20 // 10 MB
+
 func (h *DeckHandler) CreateDeck(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
 	var req deckPayload
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeError(w, fmt.Errorf("%w: invalid JSON payload", domain.ErrValidation))
 		return
 	}
@@ -78,7 +80,7 @@ func (h *DeckHandler) UpdateDeck(w http.ResponseWriter, r *http.Request) {
 	deckID := chi.URLParam(r, "deckID")
 
 	var req deckPayload
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeError(w, fmt.Errorf("%w: invalid JSON payload", domain.ErrValidation))
 		return
 	}
@@ -135,7 +137,11 @@ func (h *DeckHandler) ExportDeck(w http.ResponseWriter, r *http.Request) {
 		cw := csv.NewWriter(w)
 		_ = cw.Write([]string{"front", "back", "tags"})
 		for _, c := range cards {
-			_ = cw.Write([]string{c.Front, c.Back, strings.Join(c.Tags, ";")})
+			_ = cw.Write([]string{
+				sanitizeCSVCell(c.Front),
+				sanitizeCSVCell(c.Back),
+				sanitizeCSVCell(strings.Join(c.Tags, ";")),
+			})
 		}
 		cw.Flush()
 
@@ -172,6 +178,8 @@ func (h *DeckHandler) ImportDeck(w http.ResponseWriter, r *http.Request) {
 			format = "json"
 		}
 	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxImportBodyBytes)
 
 	var inputs []domain.CardInput
 	var err error
@@ -265,6 +273,18 @@ func parseCardsFromJSON(r io.Reader) ([]domain.CardInput, error) {
 	}
 
 	return nil, fmt.Errorf("%w: expected JSON object with 'cards' array or a JSON array of cards", domain.ErrValidation)
+}
+
+func sanitizeCSVCell(val string) string {
+	if val == "" {
+		return val
+	}
+	switch val[0] {
+	case '=', '+', '-', '@', '\t', '\r':
+		return "'" + val
+	default:
+		return val
+	}
 }
 
 func sanitizeFilename(name string) string {
