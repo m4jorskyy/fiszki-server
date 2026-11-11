@@ -44,13 +44,14 @@ func main() {
 	tokenManager := auth.NewTokenManager(cfg.JWTSecret, cfg.AccessTokenTTL, cfg.RefreshTokenTTL)
 
 	router := httpapi.NewRouter(httpapi.Dependencies{
-		DBPool:        pool,
-		UserStore:     store.NewUserStore(pool),
-		DeckStore:     store.NewDeckStore(pool),
-		CardStore:     store.NewCardStore(pool),
-		StudyStore:    store.NewStudyStore(pool),
-		TokenManager:  tokenManager,
-		CardExtractor: geminiExtractor,
+		DBPool:         pool,
+		UserStore:      store.NewUserStore(pool),
+		DeckStore:      store.NewDeckStore(pool),
+		CardStore:      store.NewCardStore(pool),
+		StudyStore:     store.NewStudyStore(pool),
+		TokenManager:   tokenManager,
+		CardExtractor:  geminiExtractor,
+		AllowedOrigins: cfg.AllowedOrigins,
 	})
 
 	srv := &http.Server{

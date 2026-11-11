@@ -139,6 +139,88 @@ func TestIsSupportedImageMIME(t *testing.T) {
 	}
 }
 
+func TestAuthCookies_SetAndClear(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", nil)
+	req.Header.Set("X-Forwarded-Proto", "https")
+
+	now := time.Now().UTC()
+	setAuthCookies(rec, req, "access.jwt.token", now.Add(15*time.Minute), "refresh.raw.token", now.Add(24*time.Hour))
+
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 2 {
+		t.Fatalf("expected 2 cookies, got %d", len(cookies))
+	}
+
+	var foundAccess, foundRefresh bool
+	for _, c := range cookies {
+		if c.Name == AccessTokenCookieName {
+			foundAccess = true
+			if c.Value != "access.jwt.token" || !c.HttpOnly || !c.Secure || c.SameSite != http.SameSiteNoneMode {
+				t.Fatalf("unexpected access cookie: %+v", c)
+			}
+		}
+		if c.Name == RefreshTokenCookieName {
+			foundRefresh = true
+			if c.Value != "refresh.raw.token" || !c.HttpOnly || !c.Secure || c.SameSite != http.SameSiteNoneMode {
+				t.Fatalf("unexpected refresh cookie: %+v", c)
+			}
+		}
+	}
+	if !foundAccess || !foundRefresh {
+		t.Fatalf("missing auth cookies: foundAccess=%v foundRefresh=%v", foundAccess, foundRefresh)
+	}
+
+	clearRec := httptest.NewRecorder()
+	clearAuthCookies(clearRec, req)
+	clearedCookies := clearRec.Result().Cookies()
+	for _, c := range clearedCookies {
+		if c.MaxAge != -1 || c.Value != "" {
+			t.Fatalf("expected cleared cookie with MaxAge=-1 and empty value, got %+v", c)
+		}
+	}
+}
+
+func TestCORSMiddleware(t *testing.T) {
+	allowed := []string{"https://my-app.vercel.app"}
+	handler := corsMiddleware(allowed)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// 1. Allowed localhost origin
+	req1 := httptest.NewRequest(http.MethodGet, "/api/v1/decks", nil)
+	req1.Header.Set("Origin", "http://localhost:3000")
+	rec1 := httptest.NewRecorder()
+	handler.ServeHTTP(rec1, req1)
+	if rec1.Header().Get("Access-Control-Allow-Origin") != "http://localhost:3000" {
+		t.Fatalf("expected allowed origin http://localhost:3000, got %q", rec1.Header().Get("Access-Control-Allow-Origin"))
+	}
+	if rec1.Header().Get("Access-Control-Allow-Credentials") != "true" {
+		t.Fatalf("expected credentials true")
+	}
+
+	// 2. Preflight OPTIONS request
+	req2 := httptest.NewRequest(http.MethodOptions, "/api/v1/decks", nil)
+	req2.Header.Set("Origin", "https://app.nihaowu.pl")
+	rec2 := httptest.NewRecorder()
+	handler.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusNoContent {
+		t.Fatalf("expected 204 for OPTIONS preflight, got %d", rec2.Code)
+	}
+	if rec2.Header().Get("Access-Control-Allow-Origin") != "https://app.nihaowu.pl" {
+		t.Fatalf("expected allowed origin https://app.nihaowu.pl, got %q", rec2.Header().Get("Access-Control-Allow-Origin"))
+	}
+
+	// 3. Disallowed origin
+	req3 := httptest.NewRequest(http.MethodGet, "/api/v1/decks", nil)
+	req3.Header.Set("Origin", "https://malicious-site.com")
+	rec3 := httptest.NewRecorder()
+	handler.ServeHTTP(rec3, req3)
+	if rec3.Header().Get("Access-Control-Allow-Origin") != "" {
+		t.Fatalf("expected no allow-origin for disallowed origin, got %q", rec3.Header().Get("Access-Control-Allow-Origin"))
+	}
+}
+
 func TestWriteError_StatusMapping(t *testing.T) {
 	cases := []struct {
 		err        error

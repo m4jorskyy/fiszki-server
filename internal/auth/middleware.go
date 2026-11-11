@@ -13,13 +13,19 @@ const userClaimsKey contextKey = "user_claims"
 func Middleware(tm *TokenManager) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var tokenStr string
 			authHeader := r.Header.Get("Authorization")
-			if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
-				http.Error(w, `{"error":"missing or invalid authorization header"}`, http.StatusUnauthorized)
+			if strings.HasPrefix(authHeader, "Bearer ") {
+				tokenStr = strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer "))
+			} else if cookie, err := r.Cookie("access_token"); err == nil && cookie.Value != "" {
+				tokenStr = strings.TrimSpace(cookie.Value)
+			}
+
+			if tokenStr == "" {
+				http.Error(w, `{"error":"missing or invalid authorization header or cookie"}`, http.StatusUnauthorized)
 				return
 			}
 
-			tokenStr := strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer "))
 			claims, err := tm.VerifyAccessToken(tokenStr)
 			if err != nil {
 				http.Error(w, `{"error":"invalid or expired access token"}`, http.StatusUnauthorized)

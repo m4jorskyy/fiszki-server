@@ -66,7 +66,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := h.issueTokens(r, user)
+	resp, err := h.issueTokens(w, r, user)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -96,7 +96,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := h.issueTokens(r, user)
+	resp, err := h.issueTokens(w, r, user)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -105,22 +105,34 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		RefreshToken string `json:"refresh_token"`
+	var rawRefreshToken string
+	if cookie, err := r.Cookie(RefreshTokenCookieName); err == nil && strings.TrimSpace(cookie.Value) != "" {
+		rawRefreshToken = strings.TrimSpace(cookie.Value)
 	}
-	if err := decodeJSON(w, r, &req); err != nil || strings.TrimSpace(req.RefreshToken) == "" {
-		writeError(w, fmt.Errorf("%w: refresh_token is required", domain.ErrValidation))
+
+	if rawRefreshToken == "" {
+		var req struct {
+			RefreshToken string `json:"refresh_token"`
+		}
+		if err := decodeJSON(w, r, &req); err == nil {
+			rawRefreshToken = strings.TrimSpace(req.RefreshToken)
+		}
+	}
+
+	if rawRefreshToken == "" {
+		writeError(w, fmt.Errorf("%w: refresh_token is required in cookie or body", domain.ErrValidation))
 		return
 	}
 
-	tokenHash := auth.HashToken(strings.TrimSpace(req.RefreshToken))
+	tokenHash := auth.HashToken(rawRefreshToken)
 	user, err := h.users.ConsumeRefreshToken(r.Context(), tokenHash)
 	if err != nil {
+		clearAuthCookies(w, r)
 		writeError(w, err)
 		return
 	}
 
-	resp, err := h.issueTokens(r, user)
+	resp, err := h.issueTokens(w, r, user)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -129,16 +141,25 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		RefreshToken string `json:"refresh_token"`
+	var rawRefreshToken string
+	if cookie, err := r.Cookie(RefreshTokenCookieName); err == nil && strings.TrimSpace(cookie.Value) != "" {
+		rawRefreshToken = strings.TrimSpace(cookie.Value)
 	}
-	if err := decodeJSON(w, r, &req); err != nil || strings.TrimSpace(req.RefreshToken) == "" {
-		writeError(w, fmt.Errorf("%w: refresh_token is required", domain.ErrValidation))
-		return
+	if rawRefreshToken == "" && r.Body != nil {
+		var req struct {
+			RefreshToken string `json:"refresh_token"`
+		}
+		if err := decodeJSON(w, r, &req); err == nil {
+			rawRefreshToken = strings.TrimSpace(req.RefreshToken)
+		}
 	}
 
-	tokenHash := auth.HashToken(strings.TrimSpace(req.RefreshToken))
-	_ = h.users.DeleteRefreshToken(r.Context(), tokenHash)
+	if rawRefreshToken != "" {
+		tokenHash := auth.HashToken(rawRefreshToken)
+		_ = h.users.DeleteRefreshToken(r.Context(), tokenHash)
+	}
+
+	clearAuthCookies(w, r)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -152,7 +173,7 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, user)
 }
 
-func (h *AuthHandler) issueTokens(r *http.Request, user domain.User) (authTokensResponse, error) {
+func (h *AuthHandler) issueTokens(w http.ResponseWriter, r *http.Request, user domain.User) (authTokensResponse, error) {
 	accessToken, expiresAt, err := h.tokens.GenerateAccessToken(user)
 	if err != nil {
 		return authTokensResponse{}, err
@@ -166,6 +187,8 @@ func (h *AuthHandler) issueTokens(r *http.Request, user domain.User) (authTokens
 	if err := h.users.SaveRefreshToken(r.Context(), user.ID, refreshHash, refreshExpiresAt); err != nil {
 		return authTokensResponse{}, err
 	}
+
+	setAuthCookies(w, r, accessToken, expiresAt, rawRefresh, refreshExpiresAt)
 
 	return authTokensResponse{
 		User:         user,

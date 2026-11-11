@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -17,13 +18,14 @@ import (
 )
 
 type Dependencies struct {
-	DBPool        *pgxpool.Pool
-	UserStore     *store.UserStore
-	DeckStore     *store.DeckStore
-	CardStore     *store.CardStore
-	StudyStore    *store.StudyStore
-	TokenManager  *auth.TokenManager
-	CardExtractor extractor.CardExtractor
+	DBPool         *pgxpool.Pool
+	UserStore      *store.UserStore
+	DeckStore      *store.DeckStore
+	CardStore      *store.CardStore
+	StudyStore     *store.StudyStore
+	TokenManager   *auth.TokenManager
+	CardExtractor  extractor.CardExtractor
+	AllowedOrigins []string
 }
 
 // cloudflareRealIP trusts CF-Connecting-IP only when the request arrives over loopback (local cloudflared tunnel).
@@ -42,11 +44,53 @@ func cloudflareRealIP(next http.Handler) http.Handler {
 	})
 }
 
+func corsMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			origin := r.Header.Get("Origin")
+			if origin != "" && isAllowedOrigin(origin, allowedOrigins) {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Access-Control-Allow-Credentials", "true")
+				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+				w.Header().Set("Access-Control-Allow-Headers", "Accept, Authorization, Content-Type, X-CSRF-Token, X-Requested-With")
+			}
+
+			if r.Method == http.MethodOptions {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func isAllowedOrigin(origin string, allowedList []string) bool {
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	if host == "localhost" || host == "127.0.0.1" {
+		return true
+	}
+	if host == "nihaowu.pl" || strings.HasSuffix(host, ".nihaowu.pl") {
+		return true
+	}
+	for _, a := range allowedList {
+		if strings.EqualFold(a, origin) || strings.EqualFold(a, host) {
+			return true
+		}
+	}
+	return false
+}
+
 func NewRouter(deps Dependencies) http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(middleware.RequestID)
 	r.Use(cloudflareRealIP)
+	r.Use(corsMiddleware(deps.AllowedOrigins))
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 
