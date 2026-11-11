@@ -51,6 +51,7 @@ func main() {
 		StudyStore:     store.NewStudyStore(pool),
 		TokenManager:   tokenManager,
 		CardExtractor:  geminiExtractor,
+		CookieDomain:   cfg.CookieDomain,
 		AllowedOrigins: cfg.AllowedOrigins,
 	})
 

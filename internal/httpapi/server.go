@@ -25,6 +25,7 @@ type Dependencies struct {
 	StudyStore     *store.StudyStore
 	TokenManager   *auth.TokenManager
 	CardExtractor  extractor.CardExtractor
+	CookieDomain   string
 	AllowedOrigins []string
 }
 
@@ -107,7 +108,7 @@ func NewRouter(deps Dependencies) http.Handler {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 
-	authHandler := NewAuthHandler(deps.UserStore, deps.TokenManager)
+	authHandler := NewAuthHandler(deps.UserStore, deps.TokenManager, deps.CookieDomain)
 	deckHandler := NewDeckHandler(deps.DeckStore, deps.CardStore)
 	cardHandler := NewCardHandler(deps.CardStore, deps.CardExtractor)
 	studyHandler := NewStudyHandler(deps.StudyStore)

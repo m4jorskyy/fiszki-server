@@ -145,7 +145,7 @@ func TestAuthCookies_SetAndClear(t *testing.T) {
 	req.Header.Set("X-Forwarded-Proto", "https")
 
 	now := time.Now().UTC()
-	setAuthCookies(rec, req, "access.jwt.token", now.Add(15*time.Minute), "refresh.raw.token", now.Add(24*time.Hour))
+	setAuthCookies(rec, req, "", "access.jwt.token", now.Add(15*time.Minute), "refresh.raw.token", now.Add(24*time.Hour))
 
 	cookies := rec.Result().Cookies()
 	if len(cookies) != 2 {
@@ -172,7 +172,7 @@ func TestAuthCookies_SetAndClear(t *testing.T) {
 	}
 
 	clearRec := httptest.NewRecorder()
-	clearAuthCookies(clearRec, req)
+	clearAuthCookies(clearRec, req, "")
 	clearedCookies := clearRec.Result().Cookies()
 	for _, c := range clearedCookies {
 		if c.MaxAge != -1 || c.Value != "" {

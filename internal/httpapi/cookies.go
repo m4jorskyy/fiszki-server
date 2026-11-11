@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -17,10 +18,25 @@ func isSecureRequest(r *http.Request) bool {
 		strings.EqualFold(r.Header.Get("CF-Visitor"), `{"scheme":"https"}`)
 }
 
-func setAuthCookies(w http.ResponseWriter, r *http.Request, accessToken string, accessExpires time.Time, refreshToken string, refreshExpires time.Time) {
+func getCookieDomain(r *http.Request, configuredDomain string) string {
+	if configuredDomain != "" {
+		return configuredDomain
+	}
+	host := r.Host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	if strings.HasSuffix(host, "nihaowu.pl") {
+		return "nihaowu.pl"
+	}
+	return ""
+}
+
+func setAuthCookies(w http.ResponseWriter, r *http.Request, cookieDomain string, accessToken string, accessExpires time.Time, refreshToken string, refreshExpires time.Time) {
 	secure := isSecureRequest(r)
+	domain := getCookieDomain(r, cookieDomain)
 	sameSite := http.SameSiteLaxMode
-	if secure {
+	if secure && domain == "" {
 		sameSite = http.SameSiteNoneMode
 	}
 
@@ -28,6 +44,7 @@ func setAuthCookies(w http.ResponseWriter, r *http.Request, accessToken string, 
 		Name:     AccessTokenCookieName,
 		Value:    accessToken,
 		Path:     "/",
+		Domain:   domain,
 		Expires:  accessExpires,
 		MaxAge:   int(time.Until(accessExpires).Seconds()),
 		HttpOnly: true,
@@ -39,6 +56,7 @@ func setAuthCookies(w http.ResponseWriter, r *http.Request, accessToken string, 
 		Name:     RefreshTokenCookieName,
 		Value:    refreshToken,
 		Path:     "/",
+		Domain:   domain,
 		Expires:  refreshExpires,
 		MaxAge:   int(time.Until(refreshExpires).Seconds()),
 		HttpOnly: true,
@@ -47,10 +65,11 @@ func setAuthCookies(w http.ResponseWriter, r *http.Request, accessToken string, 
 	})
 }
 
-func clearAuthCookies(w http.ResponseWriter, r *http.Request) {
+func clearAuthCookies(w http.ResponseWriter, r *http.Request, cookieDomain string) {
 	secure := isSecureRequest(r)
+	domain := getCookieDomain(r, cookieDomain)
 	sameSite := http.SameSiteLaxMode
-	if secure {
+	if secure && domain == "" {
 		sameSite = http.SameSiteNoneMode
 	}
 
@@ -58,6 +77,7 @@ func clearAuthCookies(w http.ResponseWriter, r *http.Request) {
 		Name:     AccessTokenCookieName,
 		Value:    "",
 		Path:     "/",
+		Domain:   domain,
 		Expires:  time.Unix(0, 0),
 		MaxAge:   -1,
 		HttpOnly: true,
@@ -69,6 +89,7 @@ func clearAuthCookies(w http.ResponseWriter, r *http.Request) {
 		Name:     RefreshTokenCookieName,
 		Value:    "",
 		Path:     "/",
+		Domain:   domain,
 		Expires:  time.Unix(0, 0),
 		MaxAge:   -1,
 		HttpOnly: true,

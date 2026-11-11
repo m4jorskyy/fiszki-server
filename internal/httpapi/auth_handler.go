@@ -13,12 +13,13 @@ import (
 )
 
 type AuthHandler struct {
-	users  *store.UserStore
-	tokens *auth.TokenManager
+	users        *store.UserStore
+	tokens       *auth.TokenManager
+	cookieDomain string
 }
 
-func NewAuthHandler(users *store.UserStore, tokens *auth.TokenManager) *AuthHandler {
-	return &AuthHandler{users: users, tokens: tokens}
+func NewAuthHandler(users *store.UserStore, tokens *auth.TokenManager, cookieDomain string) *AuthHandler {
+	return &AuthHandler{users: users, tokens: tokens, cookieDomain: cookieDomain}
 }
 
 type authCredentialsRequest struct {
@@ -127,7 +128,7 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	tokenHash := auth.HashToken(rawRefreshToken)
 	user, err := h.users.ConsumeRefreshToken(r.Context(), tokenHash)
 	if err != nil {
-		clearAuthCookies(w, r)
+		clearAuthCookies(w, r, h.cookieDomain)
 		writeError(w, err)
 		return
 	}
@@ -159,7 +160,7 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 		_ = h.users.DeleteRefreshToken(r.Context(), tokenHash)
 	}
 
-	clearAuthCookies(w, r)
+	clearAuthCookies(w, r, h.cookieDomain)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -188,7 +189,7 @@ func (h *AuthHandler) issueTokens(w http.ResponseWriter, r *http.Request, user d
 		return authTokensResponse{}, err
 	}
 
-	setAuthCookies(w, r, accessToken, expiresAt, rawRefresh, refreshExpiresAt)
+	setAuthCookies(w, r, h.cookieDomain, accessToken, expiresAt, rawRefresh, refreshExpiresAt)
 
 	return authTokensResponse{
 		User:         user,
